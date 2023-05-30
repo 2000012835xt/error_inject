@@ -469,10 +469,53 @@ def read_error_rate(file, start_row):
             line = fr_error_rate.readline()
     return error_rate
 
+def get_module_by_name(model, module_name):
+    names = module_name.split(".")
+    module = model
+    for name in names:
+        module = getattr(module, name)
+    return module
+
+
+def set_module_by_name(model, module_name, module):
+    names = module_name.split(".")
+    if len(names) == 1:
+        parent = model
+    else:
+        parent = get_module_by_name(model, ".".join(names[:-1]))
+    setattr(parent, names[-1], module)
+
+
+def replace_module_by_errormodule(model, inject_layers, error_probs):
+    
+    for i in range(len(inject_layers)):
+        name = inject_layers[i]
+        prob = error_probs[i]
+
+        module = get_module_by_name(model, name)
+        # pdb.set_trace()
+        if  isinstance(module, quant.quant_ConvReLU2d):
+            errormodule = quant.quant_ConvReLU2d_error(module.in_channels, module.out_channels, 
+                                                    module.weight, module.bias, 
+                                                    module.scale_in, module.scale_w, module.scale_out, 
+                                                    prob, module.kernel_size,
+                                                    module.stride, module.padding)
+                
+        elif isinstance(module, quant.quant_Conv2d):
+            errormodule = quant.quant_Conv2d_error(module.in_channels, module.out_channels, 
+                                                    module.weight, module.bias, 
+                                                    module.scale_in, module.scale_w, module.scale_out, 
+                                                    module.zero_point_out, prob, module.kernel_size,
+                                                    module.stride, module.padding)
+
+        set_module_by_name(model, name, errormodule)
+        
+    return model
+
 
 if __name__ == "__main__":
     if torch.cuda.is_available():
-        device = "cuda:7"
+        device = "cuda:0"
     else:
         device = "cpu"
 
@@ -483,18 +526,18 @@ if __name__ == "__main__":
     # save_file = './models/alexnet_cifar.pkl'
 
     # save_file = './models/resnet18_s8.pt'
-    save_file = "./models/vgg16_bn.pt"
+    # save_file = "./models/vgg16_bn.pt"
 
     # save_file = './models/mobilenetv1_s8.pt'
     # save_file = './models/mobilenetv1_0p5_s8.pt'
 
-    # create criterion, training and test data loader
-    time_start = time.time()
-    task = Cifar10Task(data_root='/home/zzd/zzd_data/PycharmProjects/data')
-    criterion = task.get_criterion().to(device)
-    train_loader = task.get_train_dataloader(batch_size=128)
-    test_loader = task.get_test_dataloader(batch_size=128)
-    num_class = 10
+    # # create criterion, training and test data loader
+    # time_start = time.time()
+    # task = Cifar10Task(data_root='/home/zzd/zzd_data/PycharmProjects/data')
+    # criterion = task.get_criterion().to(device)
+    # train_loader = task.get_train_dataloader(batch_size=128)
+    # test_loader = task.get_test_dataloader(batch_size=128)
+    # num_class = 10
 
     # load pre-trained model
     # model = models.vgg16_bn(num_classes=num_class)
@@ -509,6 +552,49 @@ if __name__ == "__main__":
     ####  load the trained model
     # test(model, criterion, test_loader, device, epoch=0)
 
+    '''reset34 on ImageNet'''
+
+    data_path = '/home/mengli/Data_raid/datasets/imagenet/'
+    batch_size = 128
+
+    # load training data
+    traindir = os.path.join(data_path, 'train')
+    valdir = os.path.join(data_path, 'val')
+    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                     std=[0.229, 0.224, 0.225])
+
+    # data augmentation
+    crop_scale = 0.08
+    lighting_param = 0.1
+    train_transforms = transforms.Compose([
+        transforms.RandomResizedCrop(224, scale=(crop_scale, 1.0)),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        normalize])
+
+    train_dataset = datasets.ImageFolder(
+        traindir,
+        transform=train_transforms)
+
+    train_loader = torch.utils.data.DataLoader(
+        train_dataset, batch_size=batch_size, shuffle=True,
+        num_workers=8, pin_memory=True)
+
+    # load validation data
+    test_loader = torch.utils.data.DataLoader(
+        datasets.ImageFolder(valdir, transforms.Compose([
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            normalize,
+        ])),
+        batch_size=batch_size, shuffle=False,
+        num_workers=20, pin_memory=True)
+
+    criterion = nn.CrossEntropyLoss().to(device)
+    model = torchvision.models.resnet34(pretrained=True).to(device) # resnet34 trained on imagenet
+    # test(model, criterion, test_loader, device, epoch=0) # test fp resnet34
+
 
     # quantize model with ptq and evaluate accuracy
     '''
@@ -521,61 +607,81 @@ if __name__ == "__main__":
     # for name, module in ptq_model.named_modules(): 
     #     print(name, module)
 
-    pdb.set_trace()
+    # pdb.set_trace()
 
     ptq_model = ptq_model.to('cpu').eval()
+
+    # 获取每一个residual 加完之后的requant的scale和zero_point
+    add_scale = [ptq_model.layer1_0_relu_scale_0, ptq_model.layer1_1_relu_scale_0, ptq_model.layer1_2_relu_scale_0, 
+                 ptq_model.layer2_0_relu_scale_0, ptq_model.layer2_1_relu_scale_0, ptq_model.layer2_2_relu_scale_0, ptq_model.layer2_3_relu_scale_0,
+                 ptq_model.layer3_0_relu_scale_0, ptq_model.layer3_1_relu_scale_0, ptq_model.layer3_2_relu_scale_0, 
+                 ptq_model.layer3_3_relu_scale_0, ptq_model.layer3_4_relu_scale_0, ptq_model.layer3_5_relu_scale_0, 
+                 ptq_model.layer4_0_relu_scale_0, ptq_model.layer4_1_relu_scale_0, ptq_model.layer4_2_relu_scale_0
+                 ]
+    
+    add_zero_point = [ptq_model.layer1_0_relu_zero_point_0, ptq_model.layer1_1_relu_zero_point_0, ptq_model.layer1_2_relu_zero_point_0,
+                      ptq_model.layer2_0_relu_zero_point_0, ptq_model.layer2_1_relu_zero_point_0, ptq_model.layer2_2_relu_zero_point_0, ptq_model.layer2_3_relu_zero_point_0,
+                      ptq_model.layer3_0_relu_zero_point_0, ptq_model.layer3_1_relu_zero_point_0, ptq_model.layer3_2_relu_zero_point_0, 
+                      ptq_model.layer3_3_relu_zero_point_0, ptq_model.layer3_4_relu_zero_point_0, ptq_model.layer3_5_relu_zero_point_0,
+                      ptq_model.layer4_0_relu_zero_point_0, ptq_model.layer4_1_relu_zero_point_0, ptq_model.layer4_2_relu_zero_point_0
+                      ]
+
+    tr_add_scale = [x.item() for x in add_scale]
+    tr_add_zero_point = [x.item() for x in add_zero_point]
 
     conv_weights = []
     conv_bias = []
     conv_w_scale = []
-    conv_a_scale = []
-    input_scale = []
-    input_zero_point = []
+    conv_input_scale = []
+    conv_input_zero_point = []
+    conv_out_scale = []
+    conv_out_zero_point = []
+
 
     def save_conv_data(module, input, output):
         conv_weights.append(module.weight().dequantize())
         conv_bias.append(module.bias().dequantize())
         conv_w_scale.append(module.weight().q_scale())
-        # conv_a_scale.append(input[0].q_scale())
-        conv_a_scale.append(output.q_scale())
-        input_scale.append(input[0].q_scale())
-        input_zero_point.append(input[0].q_zero_point())
-        # pdb.set_trace()
+        conv_input_scale.append(input[0].q_scale())
+        conv_input_zero_point.append(input[0].q_zero_point())
+        conv_out_scale.append(output.q_scale())
+        conv_out_zero_point.append(output.q_zero_point())
 
 
-    
-    linear_weights = []
-    linear_bias = []
-    linear_w_scale = []
-    linear_a_scale = []
-    linear_zero_point = []
-
-    def save_linear_data(module, input, output):
-        linear_weights.append(module.weight().dequantize())
-        linear_bias.append(module.bias().dequantize())
-        linear_w_scale.append(module.weight().q_scale())
-        # linear_a_scale.append(input[0].q_scale())
-        linear_a_scale.append(output.q_scale())
-        linear_zero_point.append(output.q_zero_point())
-
+    def print_ouput(module, input, output):
+        print(output)
 
     #把ptq_model的weight, bias, scale通过hook保存出来，然后写到fake quant model里
     for name, module in ptq_model.named_modules(): 
-        if isinstance(module, torch.nn.intrinsic.quantized.modules.conv_relu.ConvReLU2d):
-            module.register_forward_hook(save_conv_data)
-        if isinstance(module, torch.nn.intrinsic.quantized.modules.linear_relu.LinearReLU) or\
+        if  isinstance(module, torch.nn.intrinsic.quantized.modules.conv_relu.ConvReLU2d) or \
+            isinstance(module, torch.nn.quantized.modules.conv.Conv2d) or \
             isinstance(module, torch.nn.quantized.modules.linear.Linear):
-            module.register_forward_hook(save_linear_data)
+            print(name, module, end='\n')
+            module.register_forward_hook(save_conv_data)
+        
+        # if name == "layer1.2.conv2":
+        #     module.register_forward_hook(print_ouput)
+
+        # if isinstance(module, torch.nn.intrinsic.quantized.modules.linear_relu.LinearReLU) or\
+        #     isinstance(module, torch.nn.quantized.modules.linear.Linear):
+        #     module.register_forward_hook(save_linear_data)
             
+
     # test(ptq_model, criterion, test_loader, 'cpu', epoch=0)
+    # print("test ptq model finish**************")
+
     test_one_time(ptq_model, criterion, test_loader, 'cpu', epoch=0) #只测试一个batch, 用于得到数据
 
-    fake_quant_model = quant.quant_VGG16(num_class, input_scale[0], input_zero_point[0], conv_weights, conv_bias, 
-                                         linear_weights, linear_bias, input_scale,
-                                         conv_w_scale, conv_a_scale, linear_w_scale, linear_a_scale, linear_zero_point[-1])
 
+    fake_quant_model = quant.ResNet34_quant(num_classes=1000, conv_weights=conv_weights, conv_bias=conv_bias, 
+                                            conv_w_scale=conv_w_scale, conv_input_scale=conv_input_scale, 
+                                            conv_input_zero_point = conv_input_zero_point,
+                                            conv_out_scale=conv_out_scale, conv_out_zero_point=conv_out_zero_point,
+                                            add_scale=tr_add_scale, add_zero_point=tr_add_zero_point)
 
-    test(fake_quant_model, criterion, test_loader, device, epoch=0)
+    fake_quant_model.to(device)
+    # test(fake_quant_model, criterion, test_loader, device, epoch=0)
+
 
     # pdb.set_trace()
 
@@ -592,30 +698,34 @@ if __name__ == "__main__":
     # layer_injection = ["cnn1", "cnn2", "cnn3", "cnn4"]
     # log_file = "./log/alexnet_accuracy.csv"
 
-    # error_rate_file = ['./error_rate/resnet/layer3.csv', './error_rate/resnet/layer5.csv',
-    #                    './error_rate/resnet/layer7.csv', './error_rate/resnet/layer9.csv',
-    #                    './error_rate/resnet/layer11.csv', './error_rate/resnet/layer13.csv',
-    #                    './error_rate/resnet/layer15.csv', './error_rate/resnet/layer17.csv']
-    # layer_injection = ["layer1.1.conv1", "layer2.0.conv1", "layer2.1.conv1", "layer3.0.conv1", "layer3.1.conv1",
-    #                    "layer4.0.conv1", "layer4.1.conv1", "layer4.1.conv2"]
-    # log_file = "./log/resnet_accuracy.csv"
+    error_rate_file = ['./error_rate/resnet/layer3.csv', './error_rate/resnet/layer5.csv',
+                       './error_rate/resnet/layer7.csv', './error_rate/resnet/layer9.csv',
+                       './error_rate/resnet/layer11.csv', './error_rate/resnet/layer13.csv',
+                       './error_rate/resnet/layer15.csv', './error_rate/resnet/layer17.csv']
+    
+    layer_injection = ["layer1.1.conv1", "layer2.0.conv1", "layer2.1.conv1", "layer3.0.conv1", "layer3.1.conv1",
+                       "layer4.0.conv1", "layer4.1.conv1", "layer4.1.conv2"]
+    
+    log_file = "./log/resnet_accuracy.csv"
 
-    error_rate_file = ['./error_rate/vgg/feature6.csv', './error_rate/vgg/feature9.csv',
-                       './error_rate/vgg/feature13.csv', './error_rate/vgg/feature19.csv',
-                       './error_rate/vgg/feature23.csv', './error_rate/vgg/feature26.csv',
-                       './error_rate/vgg/feature33.csv', './error_rate/vgg/feature39.csv']
+
+
+    # error_rate_file = ['./error_rate/vgg/feature6.csv', './error_rate/vgg/feature9.csv',
+    #                    './error_rate/vgg/feature13.csv', './error_rate/vgg/feature19.csv',
+    #                    './error_rate/vgg/feature23.csv', './error_rate/vgg/feature26.csv',
+    #                    './error_rate/vgg/feature33.csv', './error_rate/vgg/feature39.csv']
     
     # layer_injection = ["features.6", "features.9", "features.13", "features.19",
     #                    "features.23", "features.26", "features.33", "features.39"]
     
-    layer_injection = ["features.2", "features.3", "features.5", "features.7",
-                       "features.9", "features.10", "features.13", "features.15"]
+    # layer_injection = ["features.2", "features.3", "features.5", "features.7",
+    #                    "features.9", "features.10", "features.13", "features.15"]
     
-    log_file = "./log/vgg_accuracy.csv"
+    # log_file = "./log/vgg_accuracy.csv"
 
     error_rate_all_layer = []
     for error_rate_file_i in error_rate_file:
-        error_rate_all_layer.append(read_error_rate(error_rate_file_i, 1))
+        error_rate_all_layer.append(read_error_rate(error_rate_file_i, 20))
 
     accuracy = []
     for i in range(len(error_rate_all_layer[0])): # len(error_rate_all_layer[0])=22,执行22次, 一共有22种case
@@ -631,35 +741,29 @@ if __name__ == "__main__":
             error_prob_injection.append(error_prob_current_layer) # len(error_prob_injection)=8
 
         acc_one_er = []
-        for repeat_i in range(2):
+        for repeat_i in range(1):
             # ptq_model_cpy = copy.deepcopy(ptq_model)
             # fake_quant_model_cpy = copy.deepcopy(fake_quant_model)
 
             time_inject_start = time.time()
             torch.manual_seed(repeat_i * 13)
 
-            fake_quant_model_error = quant.quant_VGG16_error(num_class, input_scale[0], input_zero_point[0], conv_weights, conv_bias, 
-                                         linear_weights, linear_bias, input_scale, 
-                                         conv_w_scale, conv_a_scale, linear_w_scale, linear_a_scale, linear_zero_point[-1],
-                                         error_prob_injection)
 
-            loss, acc = test(fake_quant_model_error, criterion, test_loader, device, epoch=0)
-            
+            fake_quant_model = quant.ResNet34_quant(num_classes=1000, conv_weights=conv_weights, conv_bias=conv_bias, 
+                                        conv_w_scale=conv_w_scale, conv_input_scale=conv_input_scale, 
+                                        conv_input_zero_point = conv_input_zero_point,
+                                        conv_out_scale=conv_out_scale, conv_out_zero_point=conv_out_zero_point,
+                                        add_scale=tr_add_scale, add_zero_point=tr_add_zero_point)
+
+            print(error_prob_injection, flush=True)
+
+            fake_quant_model_error = replace_module_by_errormodule(fake_quant_model, layer_injection, error_prob_injection)
             # pdb.set_trace()
+            loss, acc = test(fake_quant_model_error, criterion, test_loader, device, epoch=0)
 
-            # hooks = []
-            # for layer_i, layer in enumerate(layer_injection): # 执行8次, 向8层layer的乘累加注入error
-            #     # module_inject_error(ptq_model_cpy, [layer], prob=error_prob_injection[layer_i], bw=32,
-            #     #                     bw_hardware=24)
-            #     layer_hooks = module_inject_error(fake_quant_model, [layer], prob=error_prob_injection[layer_i], 
-            #                                       bw=32, bw_hardware=24)
-            #     hooks.extend(layer_hooks)
-            # # module_inject_error(ptq_model_cpy, ["cnn0"], prob=0, bw=32, bw_hardware=24)
-            # # ptq_model_cpy(next(iter(test_loader))[0])
-            # # loss, acc = test(ptq_model_cpy, criterion, test_loader, device, epoch=0)
-    
+            pdb.set_trace()
 
-            loss, acc = test(fake_quant_model, criterion, test_loader, device, epoch=0)
+            # loss, acc = test(fake_quant_model, criterion, test_loader, device, epoch=0)
 
             time_inject_end = time.time()
             print("injection run time: ", time_inject_end - time_inject_start)

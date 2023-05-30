@@ -77,7 +77,7 @@ class quant_Linear(nn.Module):
         self.scale1 = scale1
         self.scale2 = scale2
         self.quan1 = Quantizer(bit=8, scale=scale1, all_positive=False)
-        self.quan2 = Quantizer(bit=8, scale=scale2, zero_point=zero_point, all_positive=True)
+        self.quan2 = Quantizer(bit=8, scale=scale2, zero_point=zero_point, all_positive=False)
         # self.relu = nn.ReLU(inplace=True)
 
     def forward(self, x):
