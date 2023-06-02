@@ -18,11 +18,11 @@ class quant_ConvReLU2d(nn.Module):
         self.stride = stride
         self.padding = padding
         self.shape = (out_channels, in_channels, kernel_size, kernel_size)
-        self.weight = weight.cuda()
-        self.bias = bias.cuda()
-        self.scale0 = scale0
-        self.scale1 = scale1
-        self.scale2 = scale2
+        self.weight = nn.Parameter(torch.tensor(weight.cuda()))
+        self.bias = nn.Parameter(torch.tensor(bias.cuda()))
+        self.scale0 = nn.Parameter(torch.tensor(scale0))
+        self.scale1 = nn.Parameter(torch.tensor(scale1))
+        self.scale2 = nn.Parameter(torch.tensor(scale2))
         self.quan1 = Quantizer(bit=8, scale=scale1, all_positive=False)
         self.quan2 = Quantizer(bit=8, scale=scale2, all_positive=True)
         self.relu = nn.ReLU(inplace=True)
@@ -45,10 +45,10 @@ class quant_LinearReLU(nn.Module):
         self.shape = (out_channels, in_channels)
         # self.weight = nn.Parameter((torch.rand(self.shape)-0.5) * 0.001, requires_grad=True)
         # self.bias = nn.Parameter((torch.rand(self.out_channels)-0.5) * 0.001, requires_grad=True)
-        self.weight = weight.cuda()
-        self.bias = bias.cuda()
-        self.scale1 = scale1
-        self.scale2 = scale2
+        self.weight = nn.Parameter(torch.tensor(weight.cuda()))
+        self.bias = nn.Parameter(torch.tensor(bias.cuda()))
+        self.scale1 = nn.Parameter(torch.tensor(scale1))
+        self.scale2 = nn.Parameter(torch.tensor(scale2))
         self.quan1 = Quantizer(bit=8, scale=scale1, all_positive=False)
         self.quan2 = Quantizer(bit=8, scale=scale2, all_positive=True)
         self.relu = nn.ReLU(inplace=True)
@@ -72,10 +72,10 @@ class quant_Linear(nn.Module):
         self.shape = (out_channels, in_channels)
         # self.weight = nn.Parameter((torch.rand(self.shape)-0.5) * 0.001, requires_grad=True)
         # self.bias = nn.Parameter((torch.rand(self.out_channels)-0.5) * 0.001, requires_grad=True)
-        self.weight = weight.cuda()
-        self.bias = bias.cuda()
-        self.scale1 = scale1
-        self.scale2 = scale2
+        self.weight = nn.Parameter(torch.tensor(weight.cuda()))
+        self.bias = nn.Parameter(torch.tensor(bias.cuda()))
+        self.scale1 = nn.Parameter(torch.tensor(scale1))
+        self.scale2 = nn.Parameter(torch.tensor(scale2))
         self.quan1 = Quantizer(bit=8, scale=scale1, all_positive=False)
         self.quan2 = Quantizer(bit=8, scale=scale2, zero_point=zero_point, all_positive=False)
         # self.relu = nn.ReLU(inplace=True)
@@ -105,7 +105,9 @@ class quant_VGG16(nn.Module):
         super().__init__()
         # _log_api_usage_once(self)
 
-        self.input_quant = Quantizer(bit=8, scale=input_scale, zero_point=input_zero_point, all_positive=False)
+        self.input_scale = nn.Parameter(torch.tensor(input_scale))
+        self.input_zero_point = nn.Parameter(torch.tensor(input_zero_point).float())
+        self.input_quant = Quantizer(bit=8, scale=self.input_scale, zero_point=self.input_zero_point, all_positive=False)
         self.features = nn.ModuleList()
 
         i = 0

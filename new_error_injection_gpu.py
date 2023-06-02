@@ -472,7 +472,7 @@ def read_error_rate(file, start_row):
 
 if __name__ == "__main__":
     if torch.cuda.is_available():
-        device = "cuda:7"
+        device = "cuda:0"
     else:
         device = "cpu"
 
@@ -497,11 +497,11 @@ if __name__ == "__main__":
     num_class = 10
 
     # load pre-trained model
-    # model = models.vgg16_bn(num_classes=num_class)
+    model = models.vgg16_bn(num_classes=num_class)
 
     # pdb.set_trace()
 
-    # load_checkpoint(model, save_file)
+    load_checkpoint(model, save_file)
 
     # evaluate the accuracy of the pre-trained model
     # test(model, criterion, test_loader, device, epoch=0)
@@ -521,7 +521,7 @@ if __name__ == "__main__":
     # for name, module in ptq_model.named_modules(): 
     #     print(name, module)
 
-    pdb.set_trace()
+    # pdb.set_trace()
 
     ptq_model = ptq_model.to('cpu').eval()
 
@@ -575,9 +575,12 @@ if __name__ == "__main__":
                                          conv_w_scale, conv_a_scale, linear_w_scale, linear_a_scale, linear_zero_point[-1])
 
 
+    print("**********test fake quant model*********")
     test(fake_quant_model, criterion, test_loader, device, epoch=0)
 
-    # pdb.set_trace()
+    torch.save(fake_quant_model, 'vgg16_cifar10.pth')
+
+    pdb.set_trace()
 
     # ptq_model.to(device)
 
